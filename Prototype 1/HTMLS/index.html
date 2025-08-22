@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>People Map — Future‑Proof (Profiles + Identifier Hashes)</title>
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- MarkerCluster -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<!-- PapaParse for CSV -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<!-- Google Identity Services -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root { --bg:#0b1220; --panel:#0f1726; --card:#101826; --text:#e8eefc; --muted:#9fb0d0; --accent:#4f8cff; --danger:#ff6b6b; }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; background:var(--bg); color:var(--text); font-family:ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial; }
+  .app{ display:grid; grid-template-rows:auto 1fr; height:100%; }
+  header{ position:relative; z-index:1000; display:flex; align-items:center; gap:10px; padding:10px 14px; background:rgba(16,24,38,.95); border-bottom:1px solid rgba(255,255,255,.12); flex-wrap:wrap; }
+  header h1{ margin:0; font-size:16px; font-weight:700; }
+  .controls{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-left:auto; }
+  .btn{ background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,.14); padding:8px 12px; border-radius:10px; cursor:pointer; font-size:13px; }
+  .btn:hover{ border-color:rgba(255,255,255,.25); }
+  .file input{ display:none; }
+  .toggle{ display:inline-flex; align-items:center; gap:6px; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.14); background:var(--card); font-size:12px; cursor:pointer; }
+  .toggle input{ accent-color:var(--accent); }
+  .select,.search{ background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:8px 10px; font-size:13px; }
+  .search{ width:220px; }
+  #map{ height:100%; width:100%; }
+  .debug{ position:absolute; top:64px; left:10px; background:rgba(16,24,38,.92); color:var(--muted); padding:6px 8px; border-radius:10px; font-size:12px; border:1px solid rgba(255,255,255,.12); z-index:999; }
+  .badge{ display:none; margin-left:6px; background:var(--danger); color:#fff; padding:1px 6px; border-radius:999px; font-size:12px; }
+
+  /* Side panel */
+  .panel{ position:absolute; top:0; right:0; width:380px; max-width:92vw; height:100%; background:var(--panel); border-left:1px solid rgba(255,255,255,.1); box-shadow:-8px 0 24px rgba(0,0,0,.35); transform:translateX(100%); transition:transform .25s ease; display:flex; flex-direction:column; z-index:1200; }
+  .panel.open{ transform:translateX(0); }
+  .panel header{ display:flex; align-items:center; gap:10px; padding:12px 14px; border-bottom:1px solid rgba(255,255,255,.08); }
+  .panel header .title{ font-size:16px; font-weight:700; }
+  .panel .content{ padding:14px; overflow:auto; display:flex; flex-direction:column; gap:12px; }
+  .profile-card{ background:var(--card); border:1px solid rgba(255,255,255,.12); border-radius:14px; padding:12px; display:grid; grid-template-columns:72px 1fr; gap:12px; align-items:center; }
+  .profile-avatar{ width:72px; height:72px; border-radius:50%; background:#1c2842 center/cover no-repeat; border:2px solid #fff; display:block; }
+  .profile-name{ font-size:18px; font-weight:700; }
+  .profile-sub{ font-size:13px; color:var(--muted); }
+  .profile-row{ display:grid; grid-template-columns:110px 1fr; gap:8px; font-size:13px; }
+
+  /* Modals */
+  .modal{ position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; padding:20px; z-index:1500; }
+  .modal.open{ display:flex; }
+  .dialog{ width:min(840px,96vw); max-height:90vh; overflow:auto; background:var(--panel); border:1px solid rgba(255,255,255,.12); border-radius:14px; padding:16px; }
+  .grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .grid .full{ grid-column:1 / -1; }
+  input,textarea,select{ width:100%; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15); background:#0e1526; color:var(--text); font-size:13px; }
+  textarea{ min-height:72px; }
+
+  /* Marker */
+  .person-marker{ display:flex; flex-direction:column; align-items:center; transform:translateY(-12px); }
+  .avatar{ width:36px; height:36px; border-radius:50%; background-size:cover; background-position:center; box-shadow:0 2px 8px rgba(0,0,0,.45); border:2px solid #fff; }
+  .avatar.initials{ display:flex; align-items:center; justify-content:center; background:var(--accent); color:#fff; font-weight:700; font-family:inherit; }
+  .label{ margin-top:4px; padding:2px 6px; font-size:12px; line-height:1; background:rgba(16,24,38,.92); color:#eaf1ff; border:1px solid rgba(255,255,255,.14); border-radius:8px; white-space:nowrap; box-shadow:0 1px 4px rgba(0,0,0,.35); }
+  .person-marker.tier-1 .avatar{ border-color:#ffd54f; box-shadow:0 0 0 2px rgba(255,213,79,.32), 0 2px 8px rgba(0,0,0,.45); }
+  .person-marker.tier-2 .avatar{ border-color:#64b5f6; }
+  .person-marker.tier-3 .avatar{ border-color:#9e9e9e; }
+
+  /* Needs location */
+  .needs-item{ display:grid; grid-template-columns: 1.2fr 1.5fr auto; gap:8px; align-items:center; background:var(--panel); border:1px solid rgba(255,255,255,.12); border-radius:10px; padding:10px; }
+  .needs-name{ font-weight:700; }
+  .needs-field input{ width:100%; padding:6px 8px; border-radius:8px; border:1px solid rgba(255,255,255,.15); background:#0e1526; color:var(--text); font-size:13px; }
+
+  /* Progress bar */
+  .progress{ height:8px; background:#1c2842; border-radius:8px; overflow:hidden; border:1px solid rgba(255,255,255,.12); }
+  .progress > div{ height:100%; width:0%; background:var(--accent); transition:width .2s ease; }
+  .hint{ color:var(--muted); font-size:12px; }
+
+  /* FAB + search results */
+  .fab{ position:fixed; bottom:20px; right:20px; width:52px; height:52px; border-radius:50%; background:var(--accent); color:#fff; display:grid; place-items:center; font-size:28px; border:none; cursor:pointer; box-shadow:0 10px 22px rgba(0,0,0,.35); z-index:1100; }
+  .results{ position:absolute; top:64px; right:10px; z-index:1000; max-height:50vh; overflow:auto; min-width:260px; background:rgba(16,24,38,.96); border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:6px; display:none; }
+  .results.open{ display:block; }
+  .result-item{ padding:8px 10px; border-radius:8px; cursor:pointer; font-size:13px; }
+  .result-item:hover{ background:rgba(255,255,255,.06); }
+  .result-sub{ color:#9fb0d0; font-size:12px; }
+</style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>People Map</h1>
+      <div class="controls">
+        <label class="btn file">📄 Load CSV <input id="fileInput" type="file" accept=".csv" /></label>
+        <label class="btn file">Import vCard (.vcf) <input id="importVcf" type="file" accept=".vcf,text/vcard" /></label>
+        <button id="previewGoogleBtn" class="btn">Preview Google Import</button>
+        <button id="googleImportBtn" class="btn">Import Google Contacts</button>
+        <button id="needsBtn" class="btn">🗺️ Needs location <span id="needsBadge" class="badge">0</span></button>
+        <button id="dedupeBtn" class="btn">De‑dupe</button>
+        <button id="demoBtn" class="btn">Load Demo</button>
+        <button id="fitBtn" class="btn">Fit to Pins</button>
+        <button id="addBtn" class="btn">+ Add Person</button>
+        <label class="toggle"><input type="checkbox" id="tgGeocode"> Geocode addresses</label>
+        <label class="toggle"><input type="checkbox" id="tgIG"> Instagram avatars</label>
+        <select id="tierFilter" class="select">
+          <option value="">Tier: All</option><option value="1">Tier 1</option><option value="2">Tier 2</option><option value="3">Tier 3</option>
+        </select>
+        <input id="q" class="search" placeholder="Search name/tags/city/country" />
+        <button id="saveCsv" class="btn">Export CSV</button>
+        <button id="saveJson" class="btn">Export JSON</button>
+        <label class="btn file">Import JSON <input id="importJson" type="file" accept=".json" /></label>
+      </div>
+    </header>
+
+    <div style="position:relative; height:100%;">
+      <div id="map"></div>
+      <div id="searchResults" class="results"></div>
+      <div class="debug" id="debug">Tip: Preview Google import; use “Needs location” to place contacts without coords. Autosaves locally.</div>
+
+      <!-- Side panel -->
+      <div class="panel" id="panel">
+        <header>
+          <div class="title" id="panelTitle">Profile</div>
+          <div style="margin-left:auto"></div>
+          <button class="btn" id="editPerson">Edit</button>
+          <button class="btn" id="deletePerson">Delete</button>
+          <button class="btn" id="closePanel">Close</button>
+        </header>
+        <div class="content">
+          <div class="profile-card">
+            <div class="profile-avatar" id="pAvatar"></div>
+            <div>
+              <div class="profile-name" id="pName">—</div>
+              <div class="profile-sub" id="pSubtitle">—</div>
+            </div>
+          </div>
+          <div class="profile-row"><div>Profile</div><div id="pProfile">—</div></div>
+          <div class="profile-row"><div>Email</div><div id="pEmail">—</div></div>
+          <div class="profile-row"><div>Phone</div><div id="pPhone">—</div></div>
+          <div class="profile-row"><div>Tier</div><div id="pTier">—</div></div>
+          <div class="profile-row"><div>Occupation</div><div id="pJob">—</div></div>
+          <div class="profile-row"><div>Location</div><div id="pLoc">—</div></div>
+          <div class="profile-row"><div>Coordinates</div><div id="pCoords">—</div></div>
+          <div class="profile-row"><div>Instagram</div><div id="pIg">—</div></div>
+          <div class="profile-row"><div>Tags</div><div id="pTags">—</div></div>
+          <div class="profile-row"><div>Notes</div><div id="pNotes">—</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Modal -->
+  <div class="modal" id="modal">
+    <div class="dialog">
+      <h2 id="formTitle">Add Person</h2>
+      <form id="addForm" class="grid">
+        <label class="full">Name <input name="name" required placeholder="Jane Doe" /></label>
+        <label>Email <input name="email" type="email" placeholder="name@example.com" /></label>
+        <label>Phone <input name="phone" placeholder="+34 612 345 678" /></label>
+        <label>Occupation <input name="occupation" placeholder="Designer" /></label>
+        <label>Tier (1–3)
+          <select name="tier"><option value="">—</option><option>1</option><option>2</option><option>3</option></select>
+        </label>
+        <label>Tags (comma-separated) <input name="tags" placeholder="friend,europe,design" /></label>
+        <label>Instagram (handle or @) <input name="instagram" placeholder="@janedoe" /></label>
+        <label>Photo URL <small>(https://… jpg/png)</small> <input name="photo" placeholder="https://...jpg" /></label>
+        <label class="full">Upload Photo <input type="file" name="photoFile" accept="image/*" /></label>
+        <label class="full">Full Address <input name="address" placeholder="Optional if you enter City/Country" /></label>
+        <label>City <input name="city" placeholder="e.g., Madrid" /></label>
+        <label>Region/State <input name="region" placeholder="e.g., Community of Madrid" /></label>
+        <label>Country <input name="country" placeholder="e.g., Spain" /></label>
+        <label>Latitude <input name="lat" placeholder="(leave empty to auto-place)" /></label>
+        <label>Longitude <input name="lng" placeholder="(leave empty to auto-place)" /></label>
+        <label class="full" style="display:flex; align-items:center; gap:8px;">
+          <input type="checkbox" name="formGeocode" checked /> Place by address/city (no coords)
+        </label>
+        <label class="full">Notes <textarea name="notes" placeholder="How you met, last contacted, etc."></textarea></label>
+        <div class="full" style="display:flex; gap:8px; justify-content:flex-end; margin-top:6px;">
+          <button type="button" class="btn" id="cancelAdd">Cancel</button>
+          <button type="submit" class="btn" id="saveBtn">Save</button>
+        </div>
+      </form>
+      <div id="formStatus" class="hint" style="margin-top:8px;"></div>
+    </div>
+  </div>
+
+  <!-- Needs Location Modal -->
+  <div class="modal" id="needsModal">
+    <div class="dialog">
+      <h2>Put on the map</h2>
+      <p class="hint" style="margin-top:-8px">These people don’t have coordinates yet. Phone numbers help guess the country.</p>
+      <div id="needsList" style="display:flex; flex-direction:column; gap:10px; margin-top:12px;"></div>
+      <div style="display:flex; gap:8px; justify-content:space-between; margin-top:14px;">
+        <button id="bulkGeocode" class="btn">Bulk geocode (try all)</button>
+        <div><button id="closeNeeds" class="btn">Close</button></div>
+      </div>
+      <div id="needsStatus" class="hint" style="margin-top:8px;"></div>
+    </div>
+  </div>
+
+  <!-- Progress Modal -->
+  <div class="modal" id="progressModal">
+    <div class="dialog">
+      <h2 id="progTitle">Working…</h2>
+      <div class="progress" style="margin-top:8px;"><div id="progBar"></div></div>
+      <div id="progText" class="hint" style="margin-top:8px;">Starting…</div>
+      <div style="display:flex; justify-content:flex-end; margin-top:12px;">
+        <button id="closeProg" class="btn">Hide</button>
+      </div>
+    </div>
+  </div>
+
+  <button class="fab" id="addFab">＋</button>
+
+<script>
+/* ======= CONFIG: paste your Google OAuth CLIENT ID here ======= */
+const GOOGLE_CLIENT_ID = 'PASTE_YOUR_CLIENT_ID.apps.googleusercontent.com'; // <-- replace
+const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/contacts.readonly';
+
+/* ======= UTILITIES ======= */
+const $ = s => document.querySelector(s);
+const debug = $('#debug');
+const setDebug = msg => { if (debug) debug.innerHTML = msg; };
+const readFileAsDataURL = (file)=> new Promise(res=>{ if(!file) return res(''); const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(file); });
+function initialsFromName(name){ if(!name) return '?'; const parts=name.trim().split(/\s+/).slice(0,2); return parts.map(p=>p[0]?.toUpperCase()||'').join('')||'?'; }
+function normalizeNumber(v){ if(v==null) return NaN; if(typeof v==='number') return v; let s=String(v).trim(); if(!s) return NaN; if(s.includes(',')&&!s.includes('.')) s=s.replace(',', '.'); s=s.replace(/\s+/g,''); const n=parseFloat(s); return Number.isFinite(n)?n:NaN; }
+function pick(obj,keys){ for(const k of keys){ if(k in obj && obj[k] !== '') return obj[k]; } return ''; }
+function personToLocationString(p){ return [p.address,p.city,p.region,p.country].filter(Boolean).join(', '); }
+function instagramAvatar(handle){ if(!handle) return ''; const h=String(handle).replace(/^@/,'').trim(); if(!h) return ''; return `https://unavatar.io/instagram/${encodeURIComponent(h)}`; }
+function tierClass(t){ return t===1?'tier-1': t===2?'tier-2':'tier-3'; }
+function makePersonIcon({ name, photoUrl, tier }){
+  const safe = name || 'Unknown';
+  const hasPhoto = photoUrl && /^data:image\//i.test(photoUrl) || /^https?:\/\//i.test(photoUrl);
+  const html = `
+    <div class="person-marker ${tierClass(tier||3)}">
+      <div class="avatar ${hasPhoto?'':'initials'}" style="${hasPhoto?`background-image:url('${(photoUrl||'').replace(/'/g,"%27")}')`:''}">${hasPhoto?'':initialsFromName(safe)}</div>
+      <div class="label">${safe.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+    </div>`;
+  return L.divIcon({ html, className:'person-divicon', iconSize:[60,60], iconAnchor:[30,40], popupAnchor:[0,-40] });
+}
+function preloadImage(url, timeoutMs=7000){
+  return new Promise(res=>{
+    if(!url) return res(false);
+    const img = new Image(); img.crossOrigin='anonymous';
+    const t=setTimeout(()=>{ img.src=''; res(false); }, timeoutMs);
+    img.onload=()=>{ clearTimeout(t); res(true); };
+    img.onerror=()=>{ clearTimeout(t); res(false); };
+    img.src=url;
+  });
+}
+async function resolveAvatar({ instagram, photo, photoData }){
+  if(photoData && /^data:image\//.test(photoData)) return photoData;
+  const candidates=[];
+  const h = instagram? String(instagram).replace(/^@/,'').trim() : '';
+  if(photo && /^https?:\/\//i.test(photo)) candidates.push(photo);
+  if(h){ candidates.push(`https://unavatar.io/instagram/${encodeURIComponent(h)}`); candidates.push(`https://unavatar.io/${encodeURIComponent(h)}`); }
+  for(const url of candidates){ if(await preloadImage(url)) return url; }
+  return '';
+}
+
+/* ======= PHONE → COUNTRY HINTS ======= */
+const CC_TO_COUNTRY = {
+  '1':'United States/Canada','20':'Egypt','27':'South Africa','30':'Greece','31':'Netherlands','32':'Belgium','33':'France','34':'Spain','39':'Italy',
+  '40':'Romania','41':'Switzerland','43':'Austria','44':'United Kingdom','45':'Denmark','46':'Sweden','47':'Norway','48':'Poland','49':'Germany',
+  '52':'Mexico','54':'Argentina','55':'Brazil','56':'Chile','57':'Colombia','58':'Venezuela',
+  '60':'Malaysia','61':'Australia','62':'Indonesia','63':'Philippines','64':'New Zealand','65':'Singapore','66':'Thailand',
+  '81':'Japan','82':'South Korea','84':'Vietnam','86':'China',
+  '90':'Türkiye','91':'India','92':'Pakistan','94':'Sri Lanka',
+  '351':'Portugal','352':'Luxembourg','353':'Ireland','354':'Iceland','355':'Albania','356':'Malta','357':'Cyprus','358':'Finland','359':'Bulgaria',
+  '370':'Lithuania','371':'Latvia','372':'Estonia','373':'Moldova','374':'Armenia','375':'Belarus','376':'Andorra','377':'Monaco','378':'San Marino','380':'Ukraine','381':'Serbia','382':'Montenegro','385':'Croatia','386':'Slovenia','387':'Bosnia & Herzegovina','389':'North Macedonia',
+  '420':'Czechia','421':'Slovakia','423':'Liechtenstein',
+  '501':'Belize','502':'Guatemala','503':'El Salvador','504':'Honduras','505':'Nicaragua','506':'Costa Rica','507':'Panama','509':'Haiti',
+  '971':'United Arab Emirates','972':'Israel','973':'Bahrain','974':'Qatar','977':'Nepal'
+};
+function inferCountryFromPhone(phone){
+  if(!phone) return '';
+  const s = phone.replace(/[^\d+]/g,'');
+  if(!s.startsWith('+')) return '';
+  for(const len of [3,2,1]){ const cc=s.slice(1,1+len); if(CC_TO_COUNTRY[cc]) return CC_TO_COUNTRY[cc]; }
+  return '';
+}
+
+/* ======= HASHING (for future matching) ======= */
+async function sha256Hex(s){
+  const enc = new TextEncoder().encode(s);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function normEmail(e){ return String(e||'').trim().toLowerCase(); }
+function normPhoneE164ish(p){ return String(p||'').replace(/[^\d+]/g,''); }
+async function buildIdentifierHashes(emails=[], phones=[]){
+  const email_hashes = [];
+  const phone_hashes = [];
+  for (const e of emails){ const ne=normEmail(e); if(ne) email_hashes.push(await sha256Hex(ne)); }
+  for (const p of phones){ const np=normPhoneE164ish(p); if(np) phone_hashes.push(await sha256Hex(np)); }
+  return { email_hashes, phone_hashes };
+}
+function mergeIdentifiers(existing={}, addEmails=[], addPhones=[]){
+  const uniq = a => Array.from(new Set((a||[]).filter(Boolean)));
+  const emails = uniq([...(existing.emails||[]), ...addEmails]);
+  const phones = uniq([...(existing.phones||[]), ...addPhones]);
+  return { emails, phones };
+}
+
+/* ======= MAP ======= */
+const map = L.map('map', { zoomControl:true, minZoom:2, maxZoom:19, worldCopyJump:false }).setView([20,0],2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19, attribution:'&copy; OpenStreetMap contributors', noWrap:true}).addTo(map);
+const boundsWorld = L.latLngBounds(L.latLng(-85, -180), L.latLng(85, 180));
+map.setMaxBounds(boundsWorld);
+map.on('drag', ()=> map.panInsideBounds(boundsWorld,{animate:false}) );
+const cluster = L.markerClusterGroup({ showCoverageOnHover:false, disableClusteringAtZoom:12 });
+map.addLayer(cluster);
+
+/* ======= STATE & PERSISTENCE ======= */
+const STORAGE_KEY = 'peopleMapDataV7'; // bumped
+let people = [];
+const markerById = new Map();
+let filterTier = '', filterQuery = '';
+let currentPerson = null, isEditing = false;
+
+function defaultify(p){
+  // ensure future-proof fields exist
+  const identifiers = {
+    emails: (p.identifiers?.emails) || (p.email ? [p.email] : []),
+    phones: (p.identifiers?.phones) || (p.phone ? [p.phone] : []),
+    email_hashes: p.identifiers?.email_hashes || [],
+    phone_hashes: p.identifiers?.phone_hashes || []
+  };
+  return {
+    id: p.id || (crypto?.randomUUID?.()||String(Math.random())),
+    profile_id: p.profile_id || '',
+    profile_handle: p.profile_handle || '',
+    claimed: !!p.profile_id || !!p.claimed,
+    identifiers,
+    ...p
+  };
+}
+function saveToLocal(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(people)); }catch{} }
+function loadFromLocal(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY); if(!raw) return false;
+    const arr = JSON.parse(raw); if(!Array.isArray(arr)) return false;
+    people = arr.map(defaultify);
+    return true;
+  }catch{ return false; }
+}
+
+/* ======= GEOCODER ======= */
+async function geocodeAddress(addr){
+  if(!addr) return null;
+  const key='geo:'+addr; const cached=localStorage.getItem(key);
+  if(cached){ try{ return JSON.parse(cached); }catch{} }
+  await new Promise(r=>setTimeout(r,550));
+  try{
+    const res=await fetch('https://nominatim.openstreetmap.org/search?format=json&q='+encodeURIComponent(addr),{headers:{'Accept':'application/json'}});
+    const js=await res.json();
+    if(Array.isArray(js) && js.length){
+      const out={lat:parseFloat(js[0].lat), lng:parseFloat(js[0].lon)}; localStorage.setItem(key, JSON.stringify(out)); return out;
+    }
+  }catch(e){ console.warn('Geocode failed', e); }
+  return null;
+}
+function buildAddress({address, city, region, country}){ return [address,city,region,country].filter(Boolean).join(', '); }
+
+/* ======= FILTERS & SEARCH ======= */
+function matchesFilter(p){
+  if(filterTier){ const t=parseInt(filterTier); if((p.tier||0)!==t) return false; }
+  if(filterQuery){ const q=filterQuery.toLowerCase(); const blob=[p.name||'',p.tags||'',p.city||'',p.region||'',p.country||''].join(' ').toLowerCase(); if(!blob.includes(q)) return false; }
+  return true;
+}
+const resultsBox = $('#searchResults');
+function indexableText(p){ return [(p.name||''),(p.tags||''),(p.city||''),(p.region||''),(p.country||'')].join(' ').toLowerCase(); }
+function runSearch(q){
+  const needle=(q||'').trim().toLowerCase();
+  if(!needle){ resultsBox.classList.remove('open'); resultsBox.innerHTML=''; return; }
+  const matches = people.filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lng)).filter(p=>indexableText(p).includes(needle)).slice(0,30);
+  if(!matches.length){ resultsBox.classList.remove('open'); resultsBox.innerHTML=''; return; }
+  resultsBox.innerHTML = matches.map(p=>`
+    <div class="result-item" data-id="${p.id}">
+      <div><strong>${p.name||'—'}</strong> ${p.tier?`<span class="result-sub">• Tier ${p.tier}</span>`:''}</div>
+      <div class="result-sub">${[p.city,p.country].filter(Boolean).join(', ')||'—'}${p.tags?` • ${p.tags}`:''}</div>
+    </div>`).join('');
+  resultsBox.classList.add('open');
+  resultsBox.querySelectorAll('.result-item').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id=el.getAttribute('data-id'); const p=people.find(x=>x.id===id); if(!p) return;
+      map.flyTo([p.lat,p.lng], Math.max(6,map.getZoom())); openPanel(p); resultsBox.classList.remove('open');
+    });
+  });
+}
+
+/* ======= PANEL ======= */
+function openPanel(p){
+  currentPerson=p; $('#panel').classList.add('open');
+  (async ()=>{
+    const url = await resolveAvatar({ instagram:p.instagram, photo:p.photo, photoData:p.photoData });
+    const avatar=$('#pAvatar');
+    if(url){ avatar.style.backgroundImage=`url('${url}')`; avatar.textContent=''; }
+    else { avatar.style.backgroundImage='none'; avatar.textContent=initialsFromName(p.name); avatar.style.display='flex'; avatar.style.alignItems='center'; avatar.style.justifyContent='center'; avatar.style.color='#fff'; avatar.style.fontWeight='700'; }
+  })();
+  $('#panelTitle').textContent=p.name||'Profile';
+  $('#pName').textContent=p.name||'—';
+  $('#pSubtitle').textContent=p.tags||'';
+  $('#pProfile').textContent = p.profile_id ? `Linked (${p.profile_handle || p.profile_id})` : 'Not linked';
+  $('#pEmail').textContent = (p.identifiers?.emails?.[0]) || p.email || '—';
+  $('#pPhone').textContent = (p.identifiers?.phones?.[0]) || p.phone || '—';
+  $('#pTier').textContent=p.tier||'—';
+  $('#pJob').textContent=p.occupation||'—';
+  $('#pLoc').textContent=personToLocationString(p)||'—';
+  $('#pCoords').textContent= (Number.isFinite(p.lat)&&Number.isFinite(p.lng)) ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : '—';
+  $('#pIg').innerHTML = p.instagram ? `<a href="https://instagram.com/${String(p.instagram).replace(/^@/,'')}" target="_blank" style="color:#9fc0ff">@${String(p.instagram).replace(/^@/,'')}</a>` : '—';
+  $('#pTags').textContent=p.tags||'—';
+  $('#pNotes').textContent=p.notes||'—';
+}
+$('#closePanel').addEventListener('click', ()=> $('#panel').classList.remove('open'));
+
+/* ======= MARKERS ======= */
+async function addMarkerForPerson(p){
+  if(!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) return;
+  const photoUrl = await resolveAvatar({ instagram:p.instagram, photo:p.photo, photoData:p.photoData });
+  const marker = L.marker([p.lat,p.lng], { icon: makePersonIcon({ name:p.name, photoUrl, tier:p.tier||3 }) });
+  marker.on('click', ()=> openPanel(p));
+  cluster.addLayer(marker); markerById.set(p.id, marker);
+}
+async function refreshMarkers(){
+  cluster.clearLayers(); markerById.clear();
+  const bounds=[]; let count=0;
+  for(const p of people){
+    if(!Number.isFinite(p.lat)||!Number.isFinite(p.lng)) continue;
+    if(!matchesFilter(p)) continue;
+    await addMarkerForPerson(p); bounds.push([p.lat,p.lng]); count++;
+  }
+  if(bounds.length) map.fitBounds(bounds, { padding:[40,40] });
+  setDebug(count ? `Showing <b>${count}</b> pins${filterTier? ' (Tier '+filterTier+')':''}${filterQuery? ' • filter: '+filterQuery:''}.` : 'No pins match your filters.');
+}
+
+/* ======= NEEDS LOCATION QUEUE ======= */
+function needsLocationList(){ return people.filter(p=>!(Number.isFinite(p.lat)&&Number.isFinite(p.lng))); }
+function refreshNeedsBadge(){
+  const badge=$('#needsBadge'); if(!badge) return;
+  const n=needsLocationList().length;
+  if(n>0){ badge.textContent=String(n); badge.style.display='inline-block'; }
+  else { badge.style.display='none'; }
+}
+function openNeedsModal(){
+  const modal=$('#needsModal'); const list=$('#needsList'); const items=needsLocationList();
+  if(!items.length){ list.innerHTML=`<div class="hint">All set — everyone on the map 🎉</div>`; }
+  else {
+    list.innerHTML = items.map(p=>{
+      let hint=[p.city,p.country].filter(Boolean).join(', ');
+      if(!hint && (p.identifiers?.phones?.[0]||p.phone)){ const c=inferCountryFromPhone((p.identifiers?.phones?.[0]||p.phone)); if(c) hint = c; }
+      return `
+        <div class="needs-item" data-id="${p.id}">
+          <div class="needs-name">${p.name || '—'}</div>
+          <div class="needs-field"><input type="text" placeholder="City, Country or full address" value="${hint||''}"></div>
+          <div><button class="btn putBtn">Put on the map</button></div>
+        </div>`;
+    }).join('');
+  }
+  list.querySelectorAll('.needs-item').forEach(row=>{
+    const id=row.getAttribute('data-id'); const input=row.querySelector('input'); const btn=row.querySelector('.putBtn');
+    btn.addEventListener('click', async ()=>{
+      const p=people.find(x=>x.id===id); if(!p) return;
+      const q=(input.value || [p.address,p.city,p.region,p.country].filter(Boolean).join(', ')).trim();
+      if(!q){ alert('Please enter a place.'); return; }
+      $('#needsStatus').textContent='Locating '+p.name+'…';
+      const pt=await geocodeAddress(q);
+      if(!pt){ alert('Could not find that place. Try a fuller address.'); return; }
+      p.lat=pt.lat; p.lng=pt.lng;
+      if(!p.address && !p.city && !p.country){
+        const parts=q.split(',').map(s=>s.trim());
+        p.city = parts[0] || p.city || '';
+        p.country = parts[parts.length-1] || p.country || '';
+      }
+      await addMarkerForPerson(p); saveToLocal(); refreshNeedsBadge();
+      row.remove(); if(!$('#needsList').children.length){ $('#needsList').innerHTML=`<div class="hint">All set — everyone on the map 🎉</div>`; }
+      $('#needsStatus').textContent='Placed '+p.name+'.';
+    });
+  });
+  modal.classList.add('open');
+}
+function closeNeedsModal(){ $('#needsModal').classList.remove('open'); }
+$('#needsBtn').addEventListener('click', openNeedsModal);
+$('#closeNeeds').addEventListener('click', closeNeedsModal);
+$('#bulkGeocode').addEventListener('click', async ()=>{
+  const status=$('#needsStatus'); const items=needsLocationList();
+  if(!items.length){ status.textContent='Nothing to do.'; return; }
+  let done=0;
+  for(const p of items){
+    const q=[p.address,p.city,p.region,p.country].filter(Boolean).join(', ');
+    if(!q) continue;
+    status.textContent=`Locating ${p.name}…`;
+    const pt=await geocodeAddress(q);
+    if(pt){ p.lat=pt.lat; p.lng=pt.lng; await addMarkerForPerson(p); done++; await new Promise(r=>setTimeout(r,300)); }
+  }
+  saveToLocal(); refreshNeedsBadge(); await refreshMarkers();
+  status.textContent=`Placed ${done} contact(s).`;
+});
+
+/* ======= EDIT / DELETE ======= */
+function fillFormFromPerson(p){
+  const f=$('#addForm'); f.reset();
+  f.name.value=p.name||''; f.email.value=(p.identifiers?.emails?.[0]) || p.email || '';
+  f.phone.value=(p.identifiers?.phones?.[0]) || p.phone || '';
+  f.occupation.value=p.occupation||''; f.tier.value=p.tier||''; f.tags.value=p.tags||'';
+  f.instagram.value=p.instagram||''; f.photo.value=p.photo||'';
+  f.address.value=p.address||''; f.city.value=p.city||''; f.region.value=p.region||''; f.country.value=p.country||'';
+  f.lat.value=Number.isFinite(p.lat)?p.lat:''; f.lng.value=Number.isFinite(p.lng)?p.lng:''; f.notes.value=p.notes||''; f.formGeocode.checked=true;
+}
+$('#editPerson').addEventListener('click', ()=>{ if(!currentPerson) return; isEditing=true; $('#formTitle').textContent='Edit Person'; fillFormFromPerson(currentPerson); $('#modal').classList.add('open'); });
+$('#deletePerson').addEventListener('click', ()=>{
+  if(!currentPerson) return; const p=currentPerson;
+  if(!confirm(`Delete ${p.name}? This can’t be undone.`)) return;
+  people = people.filter(x=>x.id!==p.id);
+  const m=markerById.get(p.id); if(m){ cluster.removeLayer(m); markerById.delete(p.id); }
+  $('#panel').classList.remove('open'); currentPerson=null; saveToLocal(); setDebug('Deleted.'); refreshNeedsBadge();
+});
+
+/* ======= STARTUP ======= */
+if(loadFromLocal()){ refreshMarkers(); setDebug('Restored from local data.'); }
+refreshNeedsBadge();
+
+/* ======= CSV IMPORT ======= */
+$('#fileInput').addEventListener('change', (e)=>{
+  const f=e.target.files?.[0]; if(!f) return;
+  Papa.parse(f, {
+    header:true, skipEmptyLines:true,
+    complete: async (res)=>{
+      const rows=res.data; people=[];
+      for(const r of rows){
+        const name=pick(r,['Name','name']); if(!name) continue;
+        const email=pick(r,['Email','email']);
+        const phone=pick(r,['Phone','phone','Mobile','mobile']);
+        const photo=pick(r,['Photo URL','Photo','photo']);
+        const occupation=pick(r,['Occupation','Job','job']);
+        const instagram=pick(r,['Instagram','IG','instagram']);
+        const tags=pick(r,['Tags','tags']); const notes=pick(r,['Notes','notes']);
+        const city=pick(r,['City','city']); const region=pick(r,['Region/State','Region','State','region','state']);
+        const country=pick(r,['Country','country']); const address=pick(r,['Full Address (optional)','Full Address','Address','address']);
+        const profile_handle = pick(r,['Profile Handle','profile_handle']);
+        let tier=parseInt(pick(r,['Tier','tier']))||0; if(tier<1||tier>3) tier=3;
+        let lat=normalizeNumber(pick(r,['Latitude','latitude','lat']));
+        let lng=normalizeNumber(pick(r,['Longitude','longitude','lng','lon']));
+        if((!Number.isFinite(lat)||!Number.isFinite(lng)) && $('#tgGeocode').checked){
+          const q=buildAddress({address,city,region,country}); if(q){ const pt=await geocodeAddress(q); if(pt){ lat=pt.lat; lng=pt.lng; } }
+        }
+        // identifiers + hashes
+        let identifiers = mergeIdentifiers({}, email?[email]:[], phone?[phone]:[]);
+        const hashes = await buildIdentifierHashes(identifiers.emails, identifiers.phones);
+        identifiers = { ...identifiers, ...hashes };
+
+        people.push(defaultify({ id:crypto.randomUUID(), name, occupation, tags, instagram, phone, email, photo, address, city, region, country, lat, lng, notes, tier, profile_handle, identifiers }));
+      }
+      await refreshMarkers(); saveToLocal(); refreshNeedsBadge();
+      setDebug(`Imported ${people.length} people from CSV (saved locally).`);
+    }
+  });
+});
+
+/* ======= vCard IMPORT (FN, EMAIL, TEL, PHOTO, ADR) ======= */
+function parseVcards(text){
+  text=text.replace(/\r\n/g,'\n'); text=text.replace(/\n[ \t]/g,'');
+  const cards=[]; const blocks=text.split(/END:VCARD/ig);
+  for(let b of blocks){
+    if(!/BEGIN:VCARD/i.test(b)) continue;
+    const card={}; const lines=b.split('\n').map(l=>l.trim()).filter(Boolean);
+    for(const line of lines){
+      const idx=line.indexOf(':'); if(idx===-1) continue;
+      const left=line.slice(0,idx); const value=line.slice(idx+1);
+      const [keyRaw,...params]=left.split(';'); const key=keyRaw.toUpperCase();
+      if(key==='FN'){ card.fn=value; }
+      else if(key==='N'){ if(!card.fn){ card.fn=value.split(';').filter(Boolean).join(' ').trim(); } }
+      else if(key==='EMAIL'){ (card.emails||(card.emails=[])).push(value); }
+      else if(key==='TEL'){ (card.tels||(card.tels=[])).push(value); }
+      else if(key==='ADR'){
+        const parts=value.split(';'); card.city=parts[3]||''; card.region=parts[4]||''; card.country=parts[6]||'';
+        const street=parts[2]||''; const postal=parts[5]||''; card.address=[street,card.city,card.region,postal,card.country].filter(Boolean).join(', ');
+      }
+      else if(key==='PHOTO'){
+        if(/^data:image\//i.test(value)){ card.photoData=value; }
+        else{
+          const isB=/(ENCODING=b|BASE64)/i.test(params.join(';'));
+          const type=/TYPE=([^;]+)/i.exec(params.join(';')); const mime=type?`image/${type[1].toLowerCase()}`:'image/jpeg';
+          if(isB){ card.photoData=`data:${mime};base64,${value}`; }
+          else if(/^https?:\/\//i.test(value)){ card.photo=value; }
+        }
+      }
+    }
+    if(card.fn) cards.push(card);
+  }
+  return cards;
+}
+$('#importVcf').addEventListener('change', async (e)=>{
+  const f=e.target.files?.[0]; if(!f) return;
+  const text=await f.text();
+  const entries=parseVcards(text);
+  if(!entries.length){ alert('No contacts found in this vCard.'); return; }
+  let placed=0;
+  for(const c of entries){
+    const name=c.fn?.trim(); if(!name) continue;
+    const email=(c.emails&&c.emails[0])||'';
+    const phone=(c.tels&&c.tels[0])||'';
+    let lat=NaN, lng=NaN;
+    if($('#tgGeocode').checked){
+      const q=[c.address,c.city,c.region,c.country].filter(Boolean).join(', ');
+      if(q){ const pt=await geocodeAddress(q); if(pt){ lat=pt.lat; lng=pt.lng; } }
+    }
+    let identifiers = mergeIdentifiers({}, email?[email]:[], phone?[phone]:[]);
+    const hashes = await buildIdentifierHashes(identifiers.emails, identifiers.phones);
+    identifiers = { ...identifiers, ...hashes };
+
+    const p = defaultify({ id:crypto.randomUUID(), name, occupation:'', tags:'', notes:'', instagram:'', photo:c.photo||'', photoData:c.photoData||'', address:c.address||'', city:c.city||'', region:c.region||'', country:c.country||'', lat, lng, tier:3, identifiers });
+    people.push(p); if(Number.isFinite(lat)&&Number.isFinite(lng)){ await addMarkerForPerson(p); placed++; }
+  }
+  saveToLocal(); refreshNeedsBadge(); await refreshMarkers();
+  setDebug(placed ? `Imported ${placed} vCard contact(s) with locations.` : 'Imported vCard contacts. Some still need placement.');
+});
+
+/* ======= GOOGLE CONTACTS: PREVIEW + IMPORT ======= */
+let googleTokenClient=null;
+function ensureGoogleTokenClient(){
+  if(googleTokenClient) return googleTokenClient;
+  if(!window.google || !google.accounts || !GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID.startsWith('PASTE_')){
+    alert('Google OAuth not initialized. Paste your Client ID in the file and reload.');
+    return null;
+  }
+  googleTokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: GOOGLE_SCOPES,
+    prompt: '',
+    callback: (resp)=>{ if(resp.error){ alert('Google auth error: '+resp.error); return; } /* overridden per button */ }
+  });
+  return googleTokenClient;
+}
+async function fetchJSON(url, token){
+  const res=await fetch(url,{ headers:{ Authorization:'Bearer '+token } });
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  return await res.json();
+}
+async function fetchGooglePhotoDataURL(url, token){
+  try{
+    const res=await fetch(url,{ headers:{ Authorization:'Bearer '+token } });
+    if(!res.ok) return '';
+    const blob=await res.blob();
+    return await new Promise(resolve=>{ const fr=new FileReader(); fr.onload=()=>resolve(fr.result); fr.readAsDataURL(blob); });
+  }catch{ return ''; }
+}
+function pickAddressFromPerson(p){
+  const addrs=p.addresses||[]; const sorted=addrs.slice().sort((a,b)=>{
+    const ap=(a.metadata?.primary?1:0)+(a.type==='home'?1:0);
+    const bp=(b.metadata?.primary?1:0)+(b.type==='home'?1:0);
+    return bp-ap;
+  });
+  for(const a of sorted){
+    const city=a.city||''; const region=a.region||''; const country=a.country||'';
+    const street=a.streetAddress||''; const postal=a.postalCode||'';
+    const addrStr=a.formattedValue||[street,city,region,postal,country].filter(Boolean).join(', ');
+    if(addrStr || city || country) return { address:addrStr, city, region, country };
+  }
+  return null;
+}
+/* Progress helpers */
+function showProgress(title, text, pct){
+  $('#progTitle').textContent=title||'Working…';
+  $('#progText').textContent=text||'';
+  $('#progBar').style.width = (pct==null?0:Math.max(0,Math.min(100,pct)))+'%';
+  $('#progressModal').classList.add('open');
+}
+function hideProgress(){ $('#progressModal').classList.remove('open'); }
+$('#closeProg').addEventListener('click', hideProgress);
+
+/* Preview (dry run) */
+async function previewGoogleContacts(accessToken){
+  showProgress('Previewing Google Contacts','Counting contacts…', 10);
+  let url='https://people.googleapis.com/v1/people/me/connections?personFields=names,addresses,phoneNumbers,emailAddresses&sortOrder=FIRST_NAME_ASCENDING&pageSize=500';
+  let total=0, withAddr=0, withCityOrCountry=0, withPhone=0, withEmail=0;
+
+  while(url){
+    let data;
+    try{ data=await fetchJSON(url, accessToken); }
+    catch(e){ alert('Failed to fetch contacts: '+e.message); hideProgress(); return; }
+
+    const conns=data.connections||[]; total += conns.length;
+    for(const c of conns){
+      if(c.phoneNumbers && c.phoneNumbers.length) withPhone++;
+      if(c.emailAddresses && c.emailAddresses.length) withEmail++;
+      const picked = pickAddressFromPerson(c);
+      if(picked){
+        withAddr++;
+        if((picked.city||'') || (picked.country||'')) withCityOrCountry++;
+      }
+    }
+    url = data.nextPageToken ? ('https://people.googleapis.com/v1/people/me/connections?personFields=names,addresses,phoneNumbers,emailAddresses&sortOrder=FIRST_NAME_ASCENDING&pageSize=500&pageToken='+encodeURIComponent(data.nextPageToken)) : '';
+    showProgress('Previewing Google Contacts', `Processed ${total}…`, Math.min(95, 10 + total/5));
+    await new Promise(r=>setTimeout(r,60));
+  }
+
+  showProgress('Preview complete', `Total: ${total} • With address: ${withAddr} • With city/country: ${withCityOrCountry} • With phone: ${withPhone} • With email: ${withEmail}`, 100);
+}
+
+/* Import */
+async function importGoogleContacts(accessToken){
+  showProgress('Importing Google Contacts','Starting…', 5);
+  const wantGeocode=$('#tgGeocode').checked;
+  let url='https://people.googleapis.com/v1/people/me/connections?personFields=names,photos,addresses,phoneNumbers,emailAddresses&pageSize=500';
+  let added=0, total=0, page=0;
+
+  while(url){
+    page++; showProgress('Importing Google Contacts', `Fetching page ${page}…`, Math.min(95, 10 + page*10));
+    let data;
+    try{ data=await fetchJSON(url, accessToken); }
+    catch(e){ alert('Failed to fetch contacts: '+e.message); break; }
+
+    const conns=data.connections||[]; total += conns.length;
+    let idx=0;
+    for(const c of conns){
+      idx++; if(idx % 25 === 0){ showProgress('Importing Google Contacts', `Processing page ${page}: ${idx}/${conns.length}`, Math.min(96, 20 + idx/conns.length*60)); }
+
+      const name=c.names?.[0]?.displayName?.trim(); if(!name) continue;
+      const phone=c.phoneNumbers?.[0]?.value || '';
+      const email=c.emailAddresses?.[0]?.value || '';
+
+      let photoData=''; const pUrl=c.photos?.[0]?.url||'';
+      if(pUrl){ photoData = await fetchGooglePhotoDataURL(pUrl, accessToken); }
+
+      let lat=NaN, lng=NaN, address='', city='', region='', country='';
+      const picked = pickAddressFromPerson(c);
+      if(picked){
+        address=picked.address||''; city=picked.city||''; region=picked.region||''; country=picked.country||'';
+        if(wantGeocode){
+          const q=[address,city,region,country].filter(Boolean).join(', ');
+          if(q){ const pt=await geocodeAddress(q); if(pt){ lat=pt.lat; lng=pt.lng; } }
+        }
+      }
+
+      let identifiers = mergeIdentifiers({}, email?[email]:[], phone?[phone]:[]);
+      const hashes = await buildIdentifierHashes(identifiers.emails, identifiers.phones);
+      identifiers = { ...identifiers, ...hashes };
+
+      const p=defaultify({ id:crypto.randomUUID(), name, occupation:'', tags:'', notes:'', instagram:'', photo:'', photoData, address, city, region, country, lat, lng, tier:3, identifiers });
+      people.push(p);
+      if(Number.isFinite(lat)&&Number.isFinite(lng)){ await addMarkerForPerson(p); added++; }
+      await new Promise(r=>setTimeout(r, 60));
+    }
+
+    url = data.nextPageToken ? ('https://people.googleapis.com/v1/people/me/connections?personFields=names,photos,addresses,phoneNumbers,emailAddresses&pageSize=500&pageToken='+encodeURIComponent(data.nextPageToken)) : '';
+  }
+
+  saveToLocal(); refreshNeedsBadge(); await refreshMarkers();
+  showProgress('Done', `Imported ${total} contacts; placed ${added} with coordinates. Others are in “Needs location”.`, 100);
+}
+
+/* Buttons */
+$('#previewGoogleBtn').addEventListener('click', ()=>{
+  const tc=ensureGoogleTokenClient(); if(!tc) return;
+  tc.callback = (resp)=>{ if(resp.error){ alert('Google auth error: '+resp.error); return; } previewGoogleContacts(resp.access_token); };
+  tc.requestAccessToken({ prompt:'consent' });
+});
+$('#googleImportBtn').addEventListener('click', ()=>{
+  const tc=ensureGoogleTokenClient(); if(!tc) return;
+  tc.callback = (resp)=>{ if(resp.error){ alert('Google auth error: '+resp.error); return; } importGoogleContacts(resp.access_token); };
+  tc.requestAccessToken({ prompt:'consent' });
+});
+
+/* ======= DEMO ======= */
+$('#demoBtn').addEventListener('click', async ()=>{
+  people = [
+    defaultify({ id:crypto.randomUUID(), name:'Alex Chen', identifiers:{emails:['alex@example.com'],phones:['+351912000111']}, city:'Lisbon', country:'Portugal', lat:38.7223, lng:-9.1393, occupation:'Product Designer', tags:'friend,design', instagram:'alexchen', tier:1 }),
+    defaultify({ id:crypto.randomUUID(), name:'María Gómez', identifiers:{emails:['maria@example.es'],phones:['+34612222333']}, city:'Madrid', country:'Spain', lat:40.4168, lng:-3.7038, occupation:'Data Analyst', tags:'data,spain', tier:2 }),
+    defaultify({ id:crypto.randomUUID(), name:'Samir Patel', identifiers:{emails:['samir@example.com'],phones:['+19175550000']}, city:'New York', country:'USA', lat:40.7128, lng:-74.0060, occupation:'Software Engineer', tags:'engineering,usa', instagram:'samir.codes', tier:3 }),
+    defaultify({ id:crypto.randomUUID(), name:'Noa Levi', identifiers:{emails:['noa@example.il'],phones:['+97250222111']}, city:'Tel Aviv', country:'Israel', lat:32.0853, lng:34.7818, occupation:'Photographer', tags:'photo', photo:'https://images.unsplash.com/photo-1544723795-3fb6469f5b39?w=300', tier:1 })
+  ];
+  // build hashes for demo identifiers
+  for (const p of people){
+    const { emails=[], phones=[] } = p.identifiers || {};
+    const hashes = await buildIdentifierHashes(emails, phones);
+    p.identifiers = { emails, phones, ...hashes };
+  }
+  await refreshMarkers(); saveToLocal(); refreshNeedsBadge();
+});
+
+/* ======= FIT ======= */
+$('#fitBtn').addEventListener('click', ()=>{
+  const layers=cluster.getLayers();
+  if(layers.length){ const b=L.latLngBounds(layers.map(m=>m.getLatLng())); map.fitBounds(b,{padding:[40,40]}); }
+});
+
+/* ======= ADD / EDIT FORM ======= */
+const modal=$('#modal');
+const openAdd=()=>{ $('#formTitle').textContent='Add Person'; isEditing=false; modal.classList.add('open'); };
+const closeAdd=()=> modal.classList.remove('open');
+$('#addBtn').addEventListener('click', openAdd);
+$('#addFab').addEventListener('click', openAdd);
+$('#cancelAdd').addEventListener('click', ()=>{ isEditing=false; closeAdd(); });
+
+$('#addForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  const status=$('#formStatus'); status.textContent='';
+
+  let name=String(fd.get('name')||'').trim(); if(!name){ alert('Name is required'); return; }
+  let email=String(fd.get('email')||'').trim();
+  let phone=String(fd.get('phone')||'').trim();
+  let occupation=String(fd.get('occupation')||'').trim();
+  let tags=String(fd.get('tags')||'').trim();
+  let instagram=String(fd.get('instagram')||'').trim();
+  let photo=String(fd.get('photo')||'').trim();
+  const photoFile=fd.get('photoFile'); let photoData='';
+  if(photoFile && photoFile.size){ photoData=await readFileAsDataURL(photoFile); }
+  let address=String(fd.get('address')||'').trim();
+  let city=String(fd.get('city')||'').trim();
+  let region=String(fd.get('region')||'').trim();
+  let country=String(fd.get('country')||'').trim();
+  let tier=parseInt(String(fd.get('tier')||'').trim())||3; if(tier<1||tier>3) tier=3;
+  let lat=normalizeNumber(fd.get('lat'));
+  let lng=normalizeNumber(fd.get('lng'));
+  let notes=String(fd.get('notes')||'').trim();
+  const wantFormGeocode = fd.get('formGeocode') !== null;
+
+  if((!Number.isFinite(lat)||!Number.isFinite(lng)) && wantFormGeocode){
+    const q=buildAddress({address,city,region,country});
+    if(!q){ alert('Please provide at least a City or Country, or enter coordinates.'); return; }
+    status.textContent='Finding coordinates for '+q+'…';
+    const pt=await geocodeAddress(q);
+    if(pt){ lat=pt.lat; lng=pt.lng; status.textContent=''; }
+    else { status.textContent=''; alert('Could not locate that place. Try a fuller address or paste coordinates.'); return; }
+  }
+
+  // identifiers + hashes (merge with existing if editing)
+  const existing = isEditing ? (currentPerson.identifiers||{}) : {};
+  let merged = mergeIdentifiers(existing, email?[email]:[], phone?[phone]:[]);
+  const hashes = await buildIdentifierHashes(merged.emails, merged.phones);
+  const identifiers = { ...merged, ...hashes };
+
+  if(!isEditing){
+    const p=defaultify({ id:crypto.randomUUID(), name, occupation, tags, instagram, photo, photoData, address, city, region, country, lat, lng, notes, tier, identifiers });
+    people.push(p); if(Number.isFinite(lat)&&Number.isFinite(lng)) await addMarkerForPerson(p);
+    setDebug(`Added <b>${p.name}</b>.`);
+  }else{
+    const p=currentPerson;
+    Object.assign(p,{ name, occupation, tags, instagram, photo, address, city, region, country, lat, lng, notes, tier, identifiers });
+    if(photoData) p.photoData=photoData;
+    const old=markerById.get(p.id); if(old){ cluster.removeLayer(old); markerById.delete(p.id); }
+    if(Number.isFinite(p.lat)&&Number.isFinite(p.lng)) await addMarkerForPerson(p);
+    openPanel(p); setDebug(`Updated <b>${p.name}</b>.`);
+  }
+
+  closeAdd(); e.target.reset(); isEditing=false; saveToLocal(); refreshNeedsBadge(); await refreshMarkers();
+});
+
+/* ======= TOGGLES & SEARCH ======= */
+$('#tgIG').addEventListener('change', async ()=>{ await refreshMarkers(); saveToLocal(); });
+$('#tierFilter').addEventListener('change', (e)=>{ filterTier=e.target.value; refreshMarkers(); });
+$('#q').addEventListener('input', (e)=>{ filterQuery=e.target.value.trim(); refreshMarkers(); runSearch(e.target.value); });
+$('#q').addEventListener('keydown', (e)=>{ if(e.key==='Escape'){ resultsBox.classList.remove('open'); resultsBox.innerHTML=''; } });
+
+/* ======= EXPORTS / IMPORTS ======= */
+function toCsvRow(vals){ return vals.map(v=>{ const s=(v==null?'':String(v)); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; }).join(','); }
+function exportCSV(){
+  const header=['Name','Email','Phone','Latitude','Longitude','Photo URL','Occupation','Instagram','Tags','Notes','Full Address','City','Region/State','Country','Tier','Profile Handle'];
+  const rows=people.map(p=>[
+    p.name,
+    (p.identifiers?.emails?.[0]||''), (p.identifiers?.phones?.[0]||''),
+    p.lat, p.lng, p.photo||'', p.occupation||'', p.instagram||'', p.tags||'', p.notes||'',
+    p.address||'', p.city||'', p.region||'', p.country||'', p.tier||'',
+    p.profile_handle||''
+  ]);
+  const csv=[toCsvRow(header), ...rows.map(toCsvRow)].join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='people-export.csv'; a.click(); URL.revokeObjectURL(a.href);
+}
+function exportJSON(){ const blob=new Blob([JSON.stringify(people,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='people-export.json'; a.click(); URL.revokeObjectURL(a.href); }
+$('#saveCsv').addEventListener('click', exportCSV);
+$('#saveJson').addEventListener('click', exportJSON);
+$('#importJson').addEventListener('change', (e)=>{
+  const f=e.target.files?.[0]; if(!f) return;
+  const rd=new FileReader();
+  rd.onload=async ()=>{
+    try{
+      const arr=JSON.parse(rd.result);
+      if(!Array.isArray(arr)){ alert('JSON must be an array.'); return; }
+      people = arr.map(defaultify);
+      // ensure hashes exist for any older records that had emails/phones
+      for (const p of people){
+        const idents = p.identifiers || {};
+        const hashes = await buildIdentifierHashes(idents.emails||[], idents.phones||[]);
+        p.identifiers = { emails:idents.emails||[], phones:idents.phones||[], ...hashes };
+      }
+      await refreshMarkers(); saveToLocal(); refreshNeedsBadge();
+      setDebug(`Imported ${people.length} people from JSON (saved locally).`);
+    }catch{ alert('Invalid JSON'); }
+  };
+  rd.readAsText(f);
+});
+
+/* ======= DEDUPE (by phone, then by email, then exact name without identifiers) ======= */
+function normName(s){ return (s||'').trim().toLowerCase().replace(/\s+/g,' '); }
+function normPhone(s){ return (s||'').replace(/[^\d+]/g,''); }
+function normEmailForKey(e){ return (e||'').trim().toLowerCase(); }
+$('#dedupeBtn').addEventListener('click', ()=>{
+  let merged = 0;
+
+  const byKey = (arr, getKeys) => {
+    const map = new Map();
+    for (const p of arr){
+      const keys = getKeys(p).filter(Boolean);
+      for (const k of keys){
+        if(!map.has(k)) map.set(k, []);
+        map.get(k).push(p);
+      }
+    }
+    return map;
+  };
+
+  // 1) By phone
+  const mapPhone = byKey(people, p => (p.identifiers?.phones||[]).map(normPhone));
+  for (const [ph, arr] of mapPhone.entries()){
+    if(arr.length < 2) continue;
+    const keep = arr[0];
+    for(let i=1;i<arr.length;i++){
+      const cand = arr[i];
+      ['occupation','tags','instagram','photo','photoData','address','city','region','country','notes','tier','lat','lng','profile_id','profile_handle','claimed'].forEach(k=>{
+        if((keep[k]==null || keep[k]==='' || (Number.isNaN(keep[k]) && typeof keep[k]==='number')) && cand[k]!=null && cand[k]!=='' && !(typeof cand[k]==='number' && Number.isNaN(cand[k]))){
+          keep[k]=cand[k];
+        }
+      });
+      // merge identifiers
+      const emails = new Set([...(keep.identifiers?.emails||[]), ...(cand.identifiers?.emails||[])]);
+      const phones = new Set([...(keep.identifiers?.phones||[]), ...(cand.identifiers?.phones||[])]);
+      keep.identifiers = { emails:[...emails], phones:[...phones], email_hashes:keep.identifiers?.email_hashes||[], phone_hashes:keep.identifiers?.phone_hashes||[] };
+      const m=markerById.get(cand.id); if(m){ cluster.removeLayer(m); markerById.delete(cand.id); }
+      people = people.filter(x=>x.id!==cand.id); merged++;
+    }
+  }
+
+  // 2) By email
+  const mapEmail = byKey(people, p => (p.identifiers?.emails||[]).map(normEmailForKey));
+  for (const [em, arr] of mapEmail.entries()){
+    if(arr.length < 2) continue;
+    const keep = arr[0];
+    for(let i=1;i<arr.length;i++){
+      const cand = arr[i];
+      ['occupation','tags','instagram','photo','photoData','address','city','region','country','notes','tier','lat','lng','profile_id','profile_handle','claimed'].forEach(k=>{
+        if((keep[k]==null || keep[k]==='' || (Number.isNaN(keep[k]) && typeof keep[k]==='number')) && cand[k]!=null && cand[k]!=='' && !(typeof cand[k]==='number' && Number.isNaN(cand[k]))){
+          keep[k]=cand[k];
+        }
+      });
+      const emails = new Set([...(keep.identifiers?.emails||[]), ...(cand.identifiers?.emails||[])]);
+      const phones = new Set([...(keep.identifiers?.phones||[]), ...(cand.identifiers?.phones||[])]);
+      keep.identifiers = { emails:[...emails], phones:[...phones], email_hashes:keep.identifiers?.email_hashes||[], phone_hashes:keep.identifiers?.phone_hashes||[] };
+      const m=markerById.get(cand.id); if(m){ cluster.removeLayer(m); markerById.delete(cand.id); }
+      people = people.filter(x=>x.id!==cand.id); merged++;
+    }
+  }
+
+  // 3) Exact name matches with no identifiers
+  const noId = people.filter(p => !(p.identifiers?.emails?.length) && !(p.identifiers?.phones?.length));
+  const mapName = new Map();
+  noId.forEach(p=>{ const k=normName(p.name); if(!mapName.has(k)) mapName.set(k,[]); mapName.get(k).push(p); });
+  for (const [nm, arr] of mapName.entries()){
+    if(arr.length < 2) continue;
+    const keep = arr[0];
+    for(let i=1;i<arr.length;i++){
+      const cand = arr[i];
+      ['occupation','tags','instagram','photo','photoData','address','city','region','country','notes','tier','lat','lng','profile_id','profile_handle','claimed'].forEach(k=>{
+        if((keep[k]==null || keep[k]==='' || (Number.isNaN(keep[k]) && typeof keep[k]==='number')) && cand[k]!=null && cand[k]!=='' && !(typeof cand[k]==='number' && Number.isNaN(cand[k]))){
+          keep[k]=cand[k];
+        }
+      });
+      const m=markerById.get(cand.id); if(m){ cluster.removeLayer(m); markerById.delete(cand.id); }
+      people = people.filter(x=>x.id!==cand.id); merged++;
+    }
+  }
+
+  // rebuild hashes for safety
+  (async ()=>{
+    for (const p of people){
+      const idents = p.identifiers || {};
+      const hashes = await buildIdentifierHashes(idents.emails||[], idents.phones||[]);
+      p.identifiers = { emails:idents.emails||[], phones:idents.phones||[], ...hashes };
+    }
+    saveToLocal(); refreshNeedsBadge(); refreshMarkers();
+    alert(merged ? `Merged ${merged} duplicate record(s).` : 'No duplicates found (by phone/email/name).');
+  })();
+});
+</script>
+</body>
+</html>
