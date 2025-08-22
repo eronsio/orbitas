@@ -1,0 +1,4 @@
+Name,City,Region/State,Country,Full Address (optional),Latitude (optional),Longitude (optional),Occupation,Age,Tags (comma-separated),Instagram,Phone,Email,Met On (date),Met Where/How,Last Contacted (date),Notes,Photo URL (optional)
+Alex Chen,Lisbon,Lisboa,Portugal,,,,Product Designer,28,"friend,europe,design",@alexchen,,alex@example.com,2023-09-18,Web Summit,2025-06-05,Interested in collab on UX research.,
+María Gómez,Madrid,Comunidad de Madrid,Spain,,,,Data Analyst,31,"friend,spain,data",,,maria@example.com,2024-04-12,Mutual friend — dinner,2025-07-20,Looking to move to Berlin next year.,
+Samir Patel,New York,NY,USA,"Brooklyn, NY",,,Software Engineer,29,"work,engineering,usa",@samir.codes,,samir@example.com,2022-11-03,Conference — React NYC,2025-05-11,Happy to intro to hiring manager.,

@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>People Map — Google Contacts Import + Upload Photos</title>
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- MarkerCluster -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <!-- PapaParse for CSV -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <!-- Google Identity Services (OAuth) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    :root { --bg:#0b1220; --panel:#0f1726; --card:#101826; --text:#e8eefc; --muted:#9fb0d0; --accent:#4f8cff; }
+    *{ box-sizing: border-box; }
+    html,body{ height:100%; margin:0; background:var(--bg); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial; }
+    .app{ display:grid; grid-template-rows: auto 1fr; height:100%; }
+    header{ position:relative; z-index:1000; display:flex; align-items:center; gap:10px; padding:10px 14px; background: rgba(16,24,38,0.95); border-bottom:1px solid rgba(255,255,255,0.12); flex-wrap:wrap; }
+    header h1{ margin:0; font-size:16px; font-weight:700; }
+    .controls{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-left:auto; }
+    .btn{ background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.14); padding:8px 12px; border-radius:10px; cursor:pointer; font-size:13px; }
+    .btn:hover{ border-color: rgba(255,255,255,0.25); }
+    .file input{ display:none; }
+    .toggle{ display:inline-flex; align-items:center; gap:6px; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.14); background:var(--card); font-size:12px; cursor:pointer; }
+    .toggle input{ accent-color: var(--accent); }
+    .select, .search{ background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.14); border-radius:10px; padding:8px 10px; font-size:13px; }
+    .search{ width:220px; }
+    #map{ height:100%; width:100%; }
+    .debug{ position:absolute; top:64px; left:10px; background: rgba(16,24,38,0.92); color:var(--muted); padding:6px 8px; border-radius:10px; font-size:12px; border:1px solid rgba(255,255,255,0.12); z-index:999; }
+    /* Side panel */
+    .panel{ position:absolute; top:0; right:0; width:380px; max-width:92vw; height:100%; background:var(--panel); border-left:1px solid rgba(255,255,255,0.1); box-shadow:-8px 0 24px rgba(0,0,0,0.35); transform: translateX(100%); transition: transform .25s ease; display:flex; flex-direction:column; z-index:1200; }
+    .panel.open{ transform: translateX(0); }
+    .panel header{ display:flex; align-items:center; gap:10px; padding:12px 14px; border-bottom:1px solid rgba(255,255,255,0.08); }
+    .panel header .title{ font-size:16px; font-weight:700; }
+    .panel .content{ padding:14px; overflow:auto; display:flex; flex-direction:column; gap:12px; }
+    .profile-card{ background:var(--card); border:1px solid rgba(255,255,255,0.12); border-radius:14px; padding:12px; display:grid; grid-template-columns:72px 1fr; gap:12px; align-items:center; }
+    .profile-avatar{ width:72px; height:72px; border-radius:50%; background:#1c2842 center/cover no-repeat; border:2px solid #fff; display:block; }
+    .profile-name{ font-size:18px; font-weight:700; }
+    .profile-sub{ font-size:13px; color:var(--muted); }
+    .profile-row{ display:grid; grid-template-columns:110px 1fr; gap:8px; font-size:13px; }
+    /* Add/Edit modal */
+    .modal{ position:fixed; inset:0; background: rgba(0,0,0,0.55); display:none; align-items:center; justify-content:center; padding:20px; z-index:1500; }
+    .modal.open{ display:flex; }
+    .dialog{ width:min(720px,96vw); max-height:90vh; overflow:auto; background:var(--panel); border:1px solid rgba(255,255,255,0.12); border-radius:14px; padding:16px; }
+    .grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .grid .full{ grid-column:1 / -1; }
+    input, textarea, select{ width:100%; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.15); background:#0e1526; color:var(--text); font-size:13px; }
+    textarea{ min-height:72px; }
+    /* Custom marker */
+    .person-marker{ display:flex; flex-direction:column; align-items:center; transform: translateY(-12px); transition: transform .1s ease; }
+    .avatar{ width:36px; height:36px; border-radius:50%; background-size:cover; background-position:center; box-shadow:0 2px 8px rgba(0,0,0,0.45); border:2px solid #fff; }
+    .avatar.initials{ display:flex; align-items:center; justify-content:center; background:var(--accent); color:#fff; font-weight:700; font-family: inherit; }
+    .label{ margin-top:4px; padding:2px 6px; font-size:12px; line-height:1; background: rgba(16,24,38,0.92); color:#eaf1ff; border:1px solid rgba(255,255,255,0.14); border-radius:8px; white-space:nowrap; box-shadow:0 1px 4px rgba(0,0,0,0.35); }
+    /* Tier styling */
+    .person-marker.tier-1{ transform: translateY(-12px) scale(1.12); }
+    .person-marker.tier-2{ transform: translateY(-12px) scale(1.0); }
+    .person-marker.tier-3{ transform: translateY(-12px) scale(0.9); opacity:0.95; }
+    .person-marker.tier-1 .avatar{ border-color:#ffd54f; box-shadow:0 0 0 2px rgba(255,213,79,.32), 0 2px 8px rgba(0,0,0,.45); }
+    .person-marker.tier-2 .avatar{ border-color:#64b5f6; }
+    .person-marker.tier-3 .avatar{ border-color:#9e9e9e; }
+    /* FAB + search results */
+    .fab{ position: fixed; bottom: 20px; right: 20px; width: 52px; height: 52px; border-radius: 50%; background: var(--accent); color: white; display: grid; place-items: center; font-size: 28px; border: none; cursor: pointer; box-shadow: 0 10px 22px rgba(0,0,0,0.35); z-index: 1100; }
+    .results{ position:absolute; top:64px; right:10px; z-index:1000; max-height:50vh; overflow:auto; min-width:260px; background:rgba(16,24,38,0.96); border:1px solid rgba(255,255,255,0.14); border-radius:10px; padding:6px; display:none; }
+    .results.open{ display:block; }
+    .result-item{ padding:8px 10px; border-radius:8px; cursor:pointer; font-size:13px; }
+    .result-item:hover{ background:rgba(255,255,255,0.06); }
+    .result-sub{ color:#9fb0d0; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>People Map</h1>
+      <div class="controls">
+        <label class="btn file">📄 Load CSV
+          <input id="fileInput" type="file" accept=".csv" />
+        </label>
+        <label class="btn file">Import vCard (.vcf)
+          <input id="importVcf" type="file" accept=".vcf,text/vcard" />
+        </label>
+        <button id="googleImportBtn" class="btn" title="Import from Google Contacts">Import Google Contacts</button>
+        <button id="demoBtn" class="btn">Load Demo</button>
+        <button id="fitBtn" class="btn">Fit to Pins</button>
+        <button id="addBtn" class="btn">+ Add Person</button>
+        <label class="toggle"><input type="checkbox" id="tgGeocode"> Geocode addresses (CSV/vCard/Google)</label>
+        <label class="toggle"><input type="checkbox" id="tgIG"> Instagram avatars</label>
+        <select id="tierFilter" class="select" title="Filter by closeness">
+          <option value="">Tier: All</option>
+          <option value="1">Tier 1</option>
+          <option value="2">Tier 2</option>
+          <option value="3">Tier 3</option>
+        </select>
+        <input id="q" class="search" placeholder="Search name/tags/city/country" />
+        <button id="saveCsv" class="btn">Export CSV</button>
+        <button id="saveJson" class="btn">Export JSON</button>
+        <label class="btn file">Import JSON
+          <input id="importJson" type="file" accept=".json" />
+        </label>
+      </div>
+    </header>
+    <div style="position:relative; height:100%;">
+      <div id="map"></div>
+      <div id="searchResults" class="results"></div>
+      <div class="debug" id="debug">Tip: Use Google import or vCard to pull names, photos & addresses. Autosaves locally.</div>
+
+      <div class="panel" id="panel">
+        <header>
+          <div class="title" id="panelTitle">Profile</div>
+          <div style="margin-left:auto"></div>
+          <button class="btn" id="editPerson">Edit</button>
+          <button class="btn" id="deletePerson">Delete</button>
+          <button class="btn" id="closePanel">Close</button>
+        </header>
+        <div class="content">
+          <div class="profile-card">
+            <div class="profile-avatar" id="pAvatar"></div>
+            <div>
+              <div class="profile-name" id="pName">—</div>
+              <div class="profile-sub" id="pSubtitle">—</div>
+            </div>
+          </div>
+          <div class="profile-row"><div>Tier</div><div id="pTier">—</div></div>
+          <div class="profile-row"><div>Occupation</div><div id="pJob">—</div></div>
+          <div class="profile-row"><div>Location</div><div id="pLoc">—</div></div>
+          <div class="profile-row"><div>Coordinates</div><div id="pCoords">—</div></div>
+          <div class="profile-row"><div>Instagram</div><div id="pIg">—</div></div>
+          <div class="profile-row"><div>Tags</div><div id="pTags">—</div></div>
+          <div class="profile-row"><div>Notes</div><div id="pNotes">—</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Modal -->
+  <div class="modal" id="modal">
+    <div class="dialog">
+      <h2 id="formTitle">Add Person</h2>
+      <form id="addForm" class="grid">
+        <label class="full">Name <input name="name" required placeholder="Jane Doe" /></label>
+        <label>Occupation <input name="occupation" placeholder="Designer" /></label>
+        <label>Tier (1–3)
+          <select name="tier"><option value="">—</option><option>1</option><option>2</option><option>3</option></select>
+        </label>
+        <label>Tags (comma-separated) <input name="tags" placeholder="friend,europe,design" /></label>
+        <label>Instagram (handle or @) <input name="instagram" placeholder="@janedoe" /></label>
+        <label>Photo URL <small>(https://… jpg/png; overrides Instagram)</small> <input name="photo" placeholder="https://...jpg" /></label>
+        <label class="full">Upload Photo <input type="file" name="photoFile" accept="image/*" /></label>
+        <label class="full">Full Address <input name="address" placeholder="Optional if you enter City/Country" /></label>
+        <label>City <input name="city" placeholder="e.g., Madrid" /></label>
+        <label>Region/State <input name="region" placeholder="e.g., Community of Madrid" /></label>
+        <label>Country <input name="country" placeholder="e.g., Spain" /></label>
+        <label>Latitude <input name="lat" placeholder="(leave empty to auto-place)" /></label>
+        <label>Longitude <input name="lng" placeholder="(leave empty to auto-place)" /></label>
+        <label class="full" style="display:flex; align-items:center; gap:8px;">
+          <input type="checkbox" name="formGeocode" checked /> Place by address/city (no coords)
+        </label>
+        <label class="full">Notes <textarea name="notes" placeholder="How you met, last contacted, etc."></textarea></label>
+        <div class="full" style="display:flex; gap:8px; justify-content:flex-end; margin-top:6px;">
+          <button type="button" class="btn" id="cancelAdd">Cancel</button>
+          <button type="submit" class="btn" id="saveBtn">Save</button>
+        </div>
+      </form>
+      <div id="formStatus" style="margin-top:8px; font-size:12px; color:var(--muted);"></div>
+    </div>
+  </div>
+  <button class="fab" id="addFab">＋</button>
+
+  <script>
+    // ---------- CONFIG: paste your Google OAuth CLIENT ID here ----------
+    const GOOGLE_CLIENT_ID = 'PASTE_YOUR_CLIENT_ID.apps.googleusercontent.com'; // <-- replace this
+    const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/contacts.readonly';
+
+    // ---------- UTILITIES ----------
+    const $ = (sel) => document.querySelector(sel);
+    const debug = $('#debug');
+    function setDebug(msg){ if (debug) debug.innerHTML = msg; }
+    function initialsFromName(name){ if (!name) return '?'; const parts = name.trim().split(/\s+/).slice(0,2); return parts.map(p => p[0]?.toUpperCase() || '').join('') || '?'; }
+    function normalizeNumber(v){ if (v == null) return NaN; if (typeof v === 'number') return v; let s = String(v).trim(); if (!s) return NaN; if (s.includes(',') && !s.includes('.')) s = s.replace(',', '.'); s = s.replace(/\s+/g,''); const n = parseFloat(s); return Number.isFinite(n) ? n : NaN; }
+    function pick(obj, keys){ for (const k of keys){ if (k in obj && obj[k] !== '') return obj[k]; } return ''; }
+    const readFileAsDataURL = (file)=> new Promise(res=>{ if(!file) return res(''); const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(file); });
+
+    function instagramAvatar(handle){ if (!handle) return ''; const h = String(handle).replace(/^@/,'').trim(); if (!h) return ''; return `https://unavatar.io/instagram/${encodeURIComponent(h)}`; }
+    function tierClass(t){ return t===1?'tier-1': t===2?'tier-2':'tier-3'; }
+    function makePersonIcon({ name, photoUrl, tier }){
+      const safeName = name || 'Unknown';
+      const hasPhoto = photoUrl && /^data:image\/|^https?:\/\//i.test(photoUrl);
+      const html = `
+        <div class="person-marker ${tierClass(tier)}">
+          <div class="avatar ${hasPhoto ? '' : 'initials'}" style="${hasPhoto ? `background-image:url('${photoUrl.replace(/'/g, "%27")}')` : ''}">${hasPhoto ? '' : initialsFromName(safeName)}</div>
+          <div class="label">${safeName.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+        </div>`;
+      return L.divIcon({ html, className: 'person-divicon', iconSize: [60,60], iconAnchor: [30,40], popupAnchor: [0,-40] });
+    }
+
+    // Preload + avatar resolver (upload → URL → IG)
+    function preloadImage(url, timeoutMs=7000){
+      return new Promise(res=>{
+        if (!url) return res(false);
+        const img = new Image(); img.crossOrigin = 'anonymous';
+        const t = setTimeout(()=>{ img.src=''; res(false); }, timeoutMs);
+        img.onload = ()=>{ clearTimeout(t); res(true); };
+        img.onerror = ()=>{ clearTimeout(t); res(false); };
+        img.src = url;
+      });
+    }
+    async function resolveAvatar({ instagram, photo, photoData }){
+      if (photoData && /^data:image\//.test(photoData)) return photoData;
+      const candidates = [];
+      const h = instagram ? String(instagram).replace(/^@/,'').trim() : '';
+      if (photo && /^https?:\/\//i.test(photo)) candidates.push(photo);
+      if (h){
+        candidates.push(`https://unavatar.io/instagram/${encodeURIComponent(h)}`);
+        candidates.push(`https://unavatar.io/${encodeURIComponent(h)}`);
+      }
+      for (const url of candidates){ if (await preloadImage(url)) return url; }
+      return '';
+    }
+
+    // Geocoder (OSM Nominatim + cache)
+    async function geocodeAddress(addr){
+      if (!addr) return null;
+      const key = 'geo:'+addr;
+      const cached = localStorage.getItem(key);
+      if (cached){ try { return JSON.parse(cached); } catch(e){} }
+      await new Promise(r => setTimeout(r, 550));
+      try{
+        const res = await fetch('https://nominatim.openstreetmap.org/search?format=json&q='+encodeURIComponent(addr), { headers:{'Accept':'application/json'} });
+        const js = await res.json();
+        if (Array.isArray(js) && js.length){ const out = { lat: parseFloat(js[0].lat), lng: parseFloat(js[0].lon) }; localStorage.setItem(key, JSON.stringify(out)); return out; }
+      }catch(e){ console.warn('Geocode failed', e); }
+      return null;
+    }
+    function buildAddress({address, city, region, country}){
+      return [address, city, region, country].filter(Boolean).join(', ');
+    }
+
+    // ---------- MAP INIT (no wrap) ----------
+    const map = L.map('map', { zoomControl: true, minZoom: 2, maxZoom: 19, worldCopyJump: false }).setView([20, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors', noWrap: true }).addTo(map);
+    const boundsWorld = L.latLngBounds(L.latLng(-85, -180), L.latLng(85, 180));
+    map.setMaxBounds(boundsWorld);
+    map.on('drag', function(){ map.panInsideBounds(boundsWorld, { animate:false }); });
+    const cluster = L.markerClusterGroup({ showCoverageOnHover: false, disableClusteringAtZoom: 12 });
+    map.addLayer(cluster);
+
+    // ---------- STATE ----------
+    const STORAGE_KEY = 'peopleMapDataV4'; // bump key
+    let people = [];
+    const markerById = new Map();
+    let filterTier = '', filterQuery = '';
+    let currentPerson = null, isEditing = false;
+
+    function saveToLocal(){ try { localStorage.setItem(STORAGE_KEY, JSON.stringify(people)); } catch(e){} }
+    function loadFromLocal(){
+      try{
+        const raw = localStorage.getItem(STORAGE_KEY); if (!raw) return false;
+        const arr = JSON.parse(raw); if (!Array.isArray(arr)) return false;
+        people = arr.map(p => ({ id: p.id || (crypto?.randomUUID?.()||String(Math.random())), ...p })); return true;
+      }catch(e){ return false; }
+    }
+    function toCsvRow(vals){ return vals.map(v=>{ const s = (v==null?'':String(v)); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; }).join(','); }
+    function exportCSV(){
+      const header = ['Name','Latitude','Longitude','Photo URL','Occupation','Instagram','Tags','Notes','Full Address','City','Region/State','Country','Tier'];
+      const rows = people.map(p => [p.name,p.lat,p.lng,p.photo||'',p.occupation||'',p.instagram||'',p.tags||'',p.notes||'',p.address||'',p.city||'',p.region||'',p.country||'',p.tier||'']);
+      const csv = [toCsvRow(header), ...rows.map(toCsvRow)].join('\n');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='people-export.csv'; a.click(); URL.revokeObjectURL(a.href);
+    }
+    function exportJSON(){ const blob=new Blob([JSON.stringify(people,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='people-export.json'; a.click(); URL.revokeObjectURL(a.href); }
+
+    // ---------- FILTERS & SEARCH ----------
+    function personToLocationString(p){ return [p.address,p.city,p.region,p.country].filter(Boolean).join(', '); }
+    function matchesFilter(p){
+      if (filterTier){ const t = parseInt(filterTier); if ((p.tier||0)!==t) return false; }
+      if (filterQuery){ const q = filterQuery.toLowerCase(); const blob = [p.name||'', p.tags||'', p.city||'', p.region||'', p.country||''].join(' ').toLowerCase(); if (!blob.includes(q)) return false; }
+      return true;
+    }
+    const resultsBox = $('#searchResults');
+    function indexableText(p){ return [(p.name||''),(p.tags||''),(p.city||''),(p.region||''),(p.country||'')].join(' ').toLowerCase(); }
+    function runSearch(q){
+      const needle = (q||'').trim().toLowerCase();
+      if (!needle){ resultsBox.classList.remove('open'); resultsBox.innerHTML=''; return; }
+      const matches = people.filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lng)).filter(p=>indexableText(p).includes(needle)).slice(0,30);
+      if (!matches.length){ resultsBox.classList.remove('open'); resultsBox.innerHTML=''; return; }
+      resultsBox.innerHTML = matches.map(p=>`
+        <div class="result-item" data-id="${p.id}">
+          <div><strong>${p.name||'—'}</strong> ${p.tier?`<span class="result-sub">• Tier ${p.tier}</span>`:''}</div>
+          <div class="result-sub">${[p.city,p.country].filter(Boolean).join(', ')||'—'}${p.tags?` • ${p.tags}`:''}</div>
+        </div>`).join('');
+      resultsBox.classList.add('open');
+      resultsBox.querySelectorAll('.result-item').forEach(el=>{
+        el.addEventListener('click', ()=>{
+          const id = el.getAttribute('data-id'); const p = people.find(x=>x.id===id); if (!p) return;
+          map.flyTo([p.lat,p.lng], Math.max(6,map.getZoom())); openPanel(p); resultsBox.classList.remove('open');
+        });
+      });
+    }
+
+    // ---------- PANEL ----------
+    function openPanel(p){
+      currentPerson = p; $('#panel').classList.add('open');
+      (async ()=>{
+        const url = await resolveAvatar({ instagram: p.instagram, photo: p.photo, photoData: p.photoData });
+        const avatar = $('#pAvatar');
+        if (url){ avatar.style.backgroundImage = `url('${url}')`; avatar.textContent=''; }
+        else { avatar.style.backgroundImage='none'; avatar.textContent = initialsFromName(p.name); avatar.style.display='flex'; avatar.style.alignItems='center'; avatar.style.justifyContent='center'; avatar.style.color='#fff'; avatar.style.fontWeight='700'; }
+      })();
+      $('#panelTitle').textContent = p.name || 'Profile';
+      $('#pName').textContent = p.name || '—';
+      $('#pSubtitle').textContent = p.tags || '';
+      $('#pTier').textContent = p.tier || '—';
+      $('#pJob').textContent = p.occupation || '—';
+      $('#pLoc').textContent = personToLocationString(p) || '—';
+      $('#pCoords').textContent = (Number.isFinite(p.lat)&&Number.isFinite(p.lng)) ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : '—';
+      $('#pIg').innerHTML = p.instagram ? `<a href="https://instagram.com/${String(p.instagram).replace(/^@/,'')}" target="_blank" style="color:#9fc0ff">@${String(p.instagram).replace(/^@/,'')}</a>` : '—';
+      $('#pTags').textContent = p.tags || '—';
+      $('#pNotes').textContent = p.notes || '—';
+    }
+    $('#closePanel').addEventListener('click', ()=> $('#panel').classList.remove('open'));
+
+    // ---------- MARKERS (async) ----------
+    async function addMarkerForPerson(p){
+      const photoUrl = await resolveAvatar({ instagram: p.instagram, photo: p.photo, photoData: p.photoData });
+      const marker = L.marker([p.lat,p.lng], { icon: makePersonIcon({ name:p.name, photoUrl, tier:p.tier||3 }) });
+      marker.on('click', () => openPanel(p));
+      cluster.addLayer(marker); markerById.set(p.id, marker);
+    }
+    async function refreshMarkers(){
+      cluster.clearLayers(); markerById.clear();
+      const bounds = []; let count = 0;
+      for (const p of people){
+        if (!Number.isFinite(p.lat)||!Number.isFinite(p.lng)) continue;
+        if (!matchesFilter(p)) continue;
+        await addMarkerForPerson(p); bounds.push([p.lat,p.lng]); count++;
+      }
+      if (bounds.length) map.fitBounds(bounds, { padding:[40,40] });
+      setDebug(count ? `Showing <b>${count}</b> pins${filterTier? ' (Tier '+filterTier+')':''}${filterQuery? ' • filter: '+filterQuery:''}.` : 'No pins match your filters.');
+    }
+
+    // ---------- EDIT / DELETE ----------
+    function fillFormFromPerson(p){
+      const f = $('#addForm'); f.reset();
+      f.name.value = p.name || ''; f.occupation.value = p.occupation || ''; f.tier.value = p.tier || '';
+      f.tags.value = p.tags || ''; f.instagram.value = p.instagram || ''; f.photo.value = p.photo || '';
+      f.address.value = p.address || ''; f.city.value = p.city || ''; f.region.value = p.region || ''; f.country.value = p.country || '';
+      f.lat.value = Number.isFinite(p.lat)? p.lat : ''; f.lng.value = Number.isFinite(p.lng)? p.lng : '';
+      f.notes.value = p.notes || ''; f.formGeocode.checked = true;
+    }
+    $('#editPerson').addEventListener('click', ()=>{ if (!currentPerson) return; isEditing=true; $('#formTitle').textContent='Edit Person'; fillFormFromPerson(currentPerson); $('#modal').classList.add('open'); });
+    $('#deletePerson').addEventListener('click', ()=>{
+      if (!currentPerson) return; const p=currentPerson;
+      if (!confirm(`Delete ${p.name}? This can’t be undone.`)) return;
+      people = people.filter(x=>x.id!==p.id); const m = markerById.get(p.id); if (m){ cluster.removeLayer(m); markerById.delete(p.id); }
+      $('#panel').classList.remove('open'); currentPerson=null; saveToLocal(); setDebug('Deleted.');
+    });
+
+    // ---------- STARTUP ----------
+    if (loadFromLocal()) { refreshMarkers(); setDebug('Restored from local data.'); }
+
+    // ---------- CSV IMPORT ----------
+    $('#fileInput').addEventListener('change', (e)=>{
+      const f = e.target.files?.[0]; if (!f) return;
+      Papa.parse(f, {
+        header: true, skipEmptyLines: true,
+        complete: async (res)=>{
+          const rows = res.data; people = [];
+          for (const r of rows){
+            const name = pick(r, ['Name','name']); if (!name) continue;
+            const photo = pick(r, ['Photo URL','Photo','photo']);
+            const occupation = pick(r, ['Occupation','Job','job']);
+            const instagram = pick(r, ['Instagram','IG','instagram']);
+            const tags = pick(r, ['Tags','tags']);
+            const notes = pick(r, ['Notes','notes']);
+            const city = pick(r, ['City','city']);
+            const region = pick(r, ['Region/State','Region','State','region','state']);
+            const country = pick(r, ['Country','country']);
+            const address = pick(r, ['Full Address (optional)','Full Address','Address','address']);
+            let tier = parseInt(pick(r, ['Tier','tier'])) || 0; if (tier<1||tier>3) tier = 3;
+            let lat = normalizeNumber(pick(r, ['Latitude','latitude','lat']));
+            let lng = normalizeNumber(pick(r, ['Longitude','longitude','lng','lon']));
+            if ((!Number.isFinite(lat)||!Number.isFinite(lng)) && $('#tgGeocode').checked){
+              const query = buildAddress({address, city, region, country}); if (query){ const pt = await geocodeAddress(query); if (pt){ lat=pt.lat; lng=pt.lng; } }
+            }
+            people.push({ id: crypto.randomUUID(), name, photo, occupation, instagram, tags, notes, city, region, country, address, lat, lng, tier });
+          }
+          await refreshMarkers(); saveToLocal(); setDebug(`Imported ${people.length} people from CSV (saved locally).`);
+        }
+      });
+    });
+
+    // ---------- vCard IMPORT ----------
+    function parseVcards(text){
+      text = text.replace(/\r\n/g, '\n'); text = text.replace(/\n[ \t]/g, '');
+      const cards = []; const blocks = text.split(/END:VCARD/ig);
+      for (let b of blocks){
+        if (!/BEGIN:VCARD/i.test(b)) continue;
+        const card = {}; const lines = b.split('\n').map(l=>l.trim()).filter(Boolean);
+        for (let line of lines){
+          const idx = line.indexOf(':'); if (idx === -1) continue;
+          const left = line.slice(0, idx); const value = line.slice(idx+1);
+          const [keyRaw, ...params] = left.split(';'); const key = keyRaw.toUpperCase();
+          if (key==='FN'){ card.fn=value; }
+          else if (key==='N'){ if (!card.fn){ card.fn = value.split(';').filter(Boolean).join(' ').trim(); } }
+          else if (key==='ADR'){ const parts=value.split(';'); card.city=parts[3]||''; card.region=parts[4]||''; card.country=parts[6]||''; const street=parts[2]||''; const postal=parts[5]||''; card.address=[street,card.city,card.region,postal,card.country].filter(Boolean).join(', '); }
+          else if (key==='PHOTO'){
+            if (/^data:image\//i.test(value)){ card.photoData=value; }
+            else {
+              const isBase64=/(ENCODING=b|BASE64)/i.test(params.join(';'));
+              const typeMatch=/TYPE=([^;]+)/i.exec(params.join(';')); const mime = typeMatch?`image/${typeMatch[1].toLowerCase()}`:'image/jpeg';
+              if (isBase64){ card.photoData=`data:${mime};base64,${value}`; }
+              else if (/^https?:\/\//i.test(value)){ card.photo=value; }
+            }
+          }
+        }
+        if (card.fn) cards.push(card);
+      }
+      return cards;
+    }
+    $('#importVcf').addEventListener('change', async (e)=>{
+      const f = e.target.files?.[0]; if (!f) return;
+      const text = await f.text();
+      const entries = parseVcards(text);
+      if (!entries.length){ alert('No contacts found in this vCard.'); return; }
+      const wantGeocode = $('#tgGeocode').checked; let added = 0;
+      for (const c of entries){
+        const name = c.fn?.trim(); if (!name) continue;
+        let lat=NaN, lng=NaN;
+        if (wantGeocode){
+          const query = [c.address,c.city,c.region,c.country].filter(Boolean).join(', ');
+          if (query){ const pt = await geocodeAddress(query); if (pt){ lat=pt.lat; lng=pt.lng; } }
+        }
+        if (!Number.isFinite(lat)||!Number.isFinite(lng)) continue;
+        const p = { id:crypto.randomUUID(), name, occupation:'', tags:'', notes:'', instagram:'', photo:c.photo||'', photoData:c.photoData||'', address:c.address||'', city:c.city||'', region:c.region||'', country:c.country||'', lat, lng, tier:3 };
+        people.push(p); await addMarkerForPerson(p); added++;
+      }
+      if (!added){ alert('Contacts parsed, but none had a geocodable address.'); }
+      saveToLocal(); setDebug(`Imported ${added} contact(s) from vCard.`);
+    });
+
+    // ---------- GOOGLE CONTACTS IMPORT (no backend) ----------
+    let googleTokenClient = null;
+    function ensureGoogleTokenClient(){
+      if (googleTokenClient) return googleTokenClient;
+      if (!window.google || !google.accounts || !GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID.startsWith('PASTE_')){
+        alert('Google OAuth not initialized. Paste your Client ID in the file and reload.'); return null;
+      }
+      googleTokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: GOOGLE_SCOPES,
+        prompt: '', // silent if possible
+        callback: async (resp) => {
+          if (resp.error){ alert('Google auth error: '+resp.error); return; }
+          const token = resp.access_token;
+          await importGoogleContacts(token);
+        }
+      });
+      return googleTokenClient;
+    }
+
+    async function fetchJSON(url, token){
+      const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+      if (!res.ok) throw new Error('HTTP '+res.status);
+      return await res.json();
+    }
+    async function fetchGooglePhotoDataURL(url, token){
+      try{
+        const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+        if (!res.ok) return '';
+        const blob = await res.blob();
+        return await new Promise((resolve)=>{
+          const fr = new FileReader(); fr.onload=()=>resolve(fr.result); fr.readAsDataURL(blob);
+        });
+      }catch{ return ''; }
+    }
+
+    function pickAddressFromPerson(p){
+      const addrs = p.addresses || [];
+      // prefer labeled 'home' or primary
+      const sorted = addrs.slice().sort((a,b)=>{
+        const ap = (a.metadata?.primary?1:0) + (a.type==='home'?1:0);
+        const bp = (b.metadata?.primary?1:0) + (b.type==='home'?1:0);
+        return bp - ap;
+      });
+      for (const a of sorted){
+        const city=a.city||''; const region=a.region||''; const country=a.country||'';
+        const street=a.streetAddress||''; const postal=a.postalCode||'';
+        const addrStr = a.formattedValue || [street,city,region,postal,country].filter(Boolean).join(', ');
+        if (addrStr || city || country) return { address:addrStr, city, region, country };
+      }
+      return null;
+    }
+
+    async function importGoogleContacts(accessToken){
+      setDebug('Fetching Google Contacts…');
+      const wantGeocode = $('#tgGeocode').checked;
+      let url = 'https://people.googleapis.com/v1/people/me/connections'
+              + '?personFields=names,photos,addresses'
+              + '&pageSize=500';
+      let added = 0;
+
+      while (url){
+        let data;
+        try{ data = await fetchJSON(url, accessToken); }
+        catch(e){ alert('Failed to fetch contacts: '+e.message); break; }
+
+        const conns = data.connections || [];
+        for (const c of conns){
+          const name = c.names?.[0]?.displayName?.trim();
+          if (!name) continue;
+
+          // photo → fetch as data URL (requires token)
+          let photoData = '';
+          const photoUrl = c.photos?.[0]?.url || '';
+          if (photoUrl){ photoData = await fetchGooglePhotoDataURL(photoUrl, accessToken); }
+
+          // address → geocode
+          let lat = NaN, lng = NaN, address='', city='', region='', country='';
+          const picked = pickAddressFromPerson(c);
+          if (picked){
+            address = picked.address || ''; city=picked.city||''; region=picked.region||''; country=picked.country||'';
+            if (wantGeocode){
+              const query = [address, city, region, country].filter(Boolean).join(', ');
+              if (query){ const pt = await geocodeAddress(query); if (pt){ lat=pt.lat; lng=pt.lng; } }
+            }
+          }
+
+          if (!Number.isFinite(lat)||!Number.isFinite(lng)) continue; // skip if no location found
+
+          const p = { id:crypto.randomUUID(), name, occupation:'', tags:'', notes:'', instagram:'', photo:'', photoData, address, city, region, country, lat, lng, tier:3 };
+          people.push(p); await addMarkerForPerson(p); added++;
+        }
+
+        url = data.nextPageToken ? ('https://people.googleapis.com/v1/people/me/connections?personFields=names,photos,addresses&pageSize=500&pageToken=' + encodeURIComponent(data.nextPageToken)) : '';
+      }
+
+      saveToLocal();
+      setDebug(added ? `Imported ${added} Google contact(s).` : 'No contacts with addresses were imported.');
+    }
+
+    document.getElementById('googleImportBtn').addEventListener('click', ()=>{
+      const tc = ensureGoogleTokenClient(); if (!tc) return;
+      tc.requestAccessToken({ prompt: 'consent' });
+    });
+
+    // ---------- DEMO ----------
+    document.getElementById('demoBtn').addEventListener('click', async ()=>{
+      people = [
+        { id: crypto.randomUUID(), name:'Alex Chen', city:'Lisbon', country:'Portugal', lat:38.7223, lng:-9.1393, occupation:'Product Designer', tags:'friend,design', instagram:'alexchen', notes:'', tier:1 },
+        { id: crypto.randomUUID(), name:'María Gómez', city:'Madrid', country:'Spain', lat:40.4168, lng:-3.7038, occupation:'Data Analyst', tags:'data,spain', instagram:'', notes:'', tier:2 },
+        { id: crypto.randomUUID(), name:'Samir Patel', city:'New York', country:'USA', lat:40.7128, lng:-74.0060, occupation:'Software Engineer', tags:'engineering,usa', instagram:'samir.codes', notes:'', tier:3 },
+        { id: crypto.randomUUID(), name:'Noa Levi', city:'Tel Aviv', country:'Israel', lat:32.0853, lng:34.7818, occupation:'Photographer', tags:'photo', instagram:'noa.levi', photo:'https://images.unsplash.com/photo-1544723795-3fb6469f5b39?w=300', tier:1 }
+      ];
+      await refreshMarkers(); saveToLocal();
+    });
+
+    // ---------- FIT ----------
+    document.getElementById('fitBtn').addEventListener('click', ()=>{
+      const layers = cluster.getLayers();
+      if (layers.length){ const bounds = L.latLngBounds(layers.map(m => m.getLatLng())); map.fitBounds(bounds, { padding: [40, 40] }); }
+    });
+
+    // ---------- ADD / EDIT FORM ----------
+    const modal = $('#modal'); const openAdd=()=>{ $('#formTitle').textContent='Add Person'; isEditing=false; modal.classList.add('open'); }; const closeAdd=()=>modal.classList.remove('open');
+    document.getElementById('addBtn').addEventListener('click', openAdd);
+    document.getElementById('addFab').addEventListener('click', openAdd);
+    document.getElementById('cancelAdd').addEventListener('click', ()=>{ isEditing=false; closeAdd(); });
+
+    document.getElementById('addForm').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const status = document.getElementById('formStatus'); status.textContent = '';
+
+      let name = String(fd.get('name')||'').trim(); if (!name){ alert('Name is required'); return; }
+      let occupation = String(fd.get('occupation')||'').trim();
+      let tags = String(fd.get('tags')||'').trim();
+      let instagram = String(fd.get('instagram')||'').trim();
+      let photo = String(fd.get('photo')||'').trim();
+      const photoFile = fd.get('photoFile'); let photoData = '';
+      if (photoFile && photoFile.size){ photoData = await readFileAsDataURL(photoFile); }
+      let address = String(fd.get('address')||'').trim();
+      let city = String(fd.get('city')||'').trim();
+      let region = String(fd.get('region')||'').trim();
+      let country = String(fd.get('country')||'').trim();
+      let tier = parseInt(String(fd.get('tier')||'').trim()) || 3; if (tier<1||tier>3) tier=3;
+      let lat = normalizeNumber(fd.get('lat'));
+      let lng = normalizeNumber(fd.get('lng'));
+      let notes = String(fd.get('notes')||'').trim();
+      const wantFormGeocode = fd.get('formGeocode') !== null;
+
+      if ((!Number.isFinite(lat) || !Number.isFinite(lng)) && wantFormGeocode){
+        const query = buildAddress({address, city, region, country});
+        if (!query){ alert('Please provide at least a City or Country, or enter coordinates.'); return; }
+        status.textContent = 'Finding coordinates for '+query+'…';
+        const pt = await geocodeAddress(query);
+        if (pt){ lat = pt.lat; lng = pt.lng; status.textContent = ''; }
+        else { status.textContent = ''; alert('Could not locate that place. Please try a fuller address or paste coordinates.'); return; }
+      }
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)){ alert('Please provide Lat/Lng or enable “Place by address/city”.'); return; }
+
+      if (!isEditing){
+        const p = { id: crypto.randomUUID(), name, occupation, tags, instagram, photo, photoData, address, city, region, country, lat, lng, notes, tier };
+        people.push(p); await addMarkerForPerson(p); setDebug(`Added <b>${p.name}</b>.`);
+      } else {
+        const p = currentPerson;
+        Object.assign(p, { name, occupation, tags, instagram, photo, address, city, region, country, lat, lng, notes, tier });
+        if (photoData) p.photoData = photoData;
+        const old = markerById.get(p.id); if (old){ cluster.removeLayer(old); markerById.delete(p.id); }
+        await addMarkerForPerson(p); openPanel(p); setDebug(`Updated <b>${p.name}</b>.`);
+      }
+
+      closeAdd(); e.target.reset(); isEditing = false; saveToLocal();
+    });
+
+    // ---------- TOGGLES & SEARCH ----------
+    document.getElementById('tgIG').addEventListener('change', async ()=>{ await refreshMarkers(); saveToLocal(); });
+    document.getElementById('tierFilter').addEventListener('change', (e)=>{ filterTier = e.target.value; refreshMarkers(); });
+    document.getElementById('q').addEventListener('input', (e)=>{ filterQuery = e.target.value.trim(); refreshMarkers(); runSearch(e.target.value); });
+    document.getElementById('q').addEventListener('keydown',(e)=>{ if (e.key==='Escape'){ resultsBox.classList.remove('open'); resultsBox.innerHTML=''; } });
+
+    // ---------- EXPORTS / IMPORTS ----------
+    document.getElementById('saveCsv').addEventListener('click', exportCSV);
+    document.getElementById('saveJson').addEventListener('click', exportJSON);
+    document.getElementById('importJson').addEventListener('change', (e)=>{
+      const f = e.target.files?.[0]; if (!f) return;
+      const rd = new FileReader();
+      rd.onload = async ()=>{
+        try{
+          const arr = JSON.parse(rd.result);
+          if (!Array.isArray(arr)) { alert('JSON must be an array.'); return; }
+          people = arr.map(p => ({ id: p.id || (crypto?.randomUUID?.()||String(Math.random())), ...p }));
+          await refreshMarkers(); saveToLocal();
+          setDebug(`Imported ${people.length} people from JSON (saved locally).`);
+        }catch(err){ alert('Invalid JSON'); }
+      };
+      rd.readAsText(f);
+    });
+  </script>
+</body>
+</html>
